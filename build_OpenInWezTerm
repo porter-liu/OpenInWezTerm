@@ -1,0 +1,107 @@
+# Create a Finder-toolbar clickable app: OpenInWezTerm.app
+# Click in Finder toolbar:
+# - If a folder is selected, open that folder
+# - Else open the front Finder window's folder
+# - Else fallback to Desktop, then HOME
+# WezTerm: opens new tab if running, launches otherwise.
+# Uses WezTerm's own icon.
+
+set -e
+
+APP="$HOME/Applications/OpenInWezTerm.app"
+WEZ="/Applications/WezTerm.app/Contents/MacOS/wezterm"
+ICON_SRC="./icon.icns"
+
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+
+cat > "$APP/Contents/MacOS/OpenInWezTerm" <<'EOF'
+#!/bin/zsh
+set -e
+
+WEZ="/Applications/WezTerm.app/Contents/MacOS/wezterm"
+
+# 1) If Finder passed items (drag/drop), use them.
+if [ "$#" -gt 0 ]; then
+  for p in "$@"; do
+    # If it's a file, use its parent dir
+    if [ -f "$p" ]; then
+      p="$(dirname "$p")"
+    fi
+    "$WEZ" cli spawn --cwd "$p"
+  done
+  exit 0
+fi
+
+# 2) Toolbar click: query Finder for selection or front window target.
+dir="$(osascript -l AppleScript <<'AS'
+tell application "Finder"
+  try
+    if (count of (selection)) > 0 then
+      set itemPath to POSIX path of (item 1 of (selection) as alias)
+      -- if it's a file, use container
+      try
+        set theItem to item 1 of (selection)
+        if (class of theItem) is not folder then
+          set itemPath to POSIX path of ((container of theItem) as alias)
+        end if
+      end try
+      return itemPath
+    end if
+  end try
+
+  try
+    if (count of windows) > 0 then
+      return POSIX path of (target of front window as alias)
+    end if
+  end try
+
+  try
+    return POSIX path of (path to desktop folder)
+  end try
+end tell
+AS
+)"
+
+# 3) Fallback
+if [ -z "$dir" ]; then
+  dir="$HOME"
+fi
+
+"$WEZ" cli spawn --cwd "$dir"
+EOF
+
+chmod +x "$APP/Contents/MacOS/OpenInWezTerm"
+
+cat > "$APP/Contents/Info.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>OpenInWezTerm</string>
+  <key>CFBundleExecutable</key>
+  <string>OpenInWezTerm</string>
+  <key>CFBundleIdentifier</key>
+  <string>local.openinwezterm</string>
+  <key>CFBundleVersion</key>
+  <string>1.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleIconFile</key>
+  <string>icon.icns</string>
+</dict>
+</plist>
+EOF
+
+if [ -f "$ICON_SRC" ]; then
+  cp "$ICON_SRC" "$APP/Contents/Resources/icon.icns"
+else
+  echo "WARNING: WezTerm icon not found at: $ICON_SRC (app will use default icon)"
+fi
+
+touch "$APP"
+killall Finder >/dev/null 2>&1 || true
+
+echo "Created/updated: $APP"
+echo "If it's already on Finder toolbar, remove it and drag it in again (Finder may cache the old version)."
